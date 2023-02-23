@@ -53,3 +53,7 @@ werkzeug=1.0.1=py_0
 wheel=0.34.2=py36_0
 xz=5.2.4=h14c3975_4
 zlib=1.2.11=h7b6447c_3
+gym==0.21.0
+imageio==2.25.1
+matplotlib==3.7.0
+pyglet==1.5.27
