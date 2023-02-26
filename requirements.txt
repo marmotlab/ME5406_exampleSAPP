@@ -5,4 +5,4 @@ python==3.8.13
 
 
 # Once installed and activated, please run
-# pip install --user gym==0.21.0 pyglet==1.5.27 tensorboard==2.10.1 torch==1.12.0 imageio scipy numpy jupyter
+# pip install --user gym==0.21.0 pyglet==1.5.27 tensorboard==2.10.1 torch==1.12.0 imageio matplotlib scipy numpy jupyter
