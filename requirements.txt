@@ -1,9 +1,8 @@
-gym==0.21.0
-imageio==2.25.1
-matplotlib==3.7.0
-pyglet==1.5.27
-scipy==1.9.1
-numpy==1.23.1
-tensorboard==2.10.1
-torch==1.12.0
+# This file may be used to create an environment using:
+# $ conda create --name <env> --file <this file>
+# platform: linux-64
 python==3.8.13
+
+
+# Once installed and activated, please run
+# pip install --user gym==0.21.0 pyglet==1.5.27 tensorboard==2.10.1 torch==1.12.0 imageio scipy numpy jupyter
