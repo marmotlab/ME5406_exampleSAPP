@@ -185,8 +185,6 @@ class Worker:
                 episode_rewards.append(episode_reward)
 
                 if not TRAINING:
-                    if episode_count < NUM_EXPS:
-                        plan_durations[episode_count] = episode_step_count
                     episode_count += 1
                     print('({}) Thread 0: {} steps, {:.2f} reward ({} invalids).'.format(episode_count, episode_step_count, episode_reward, episode_inv_count))
                     GIF_episode = int(episode_count)
@@ -263,7 +261,7 @@ SAVE_EPISODE_BUFFER    = False
 TRAINING               = True
 GREEDY                 = False
 NUM_EXPS               = 100
-MODEL_NUMBER           = 313000
+MODEL_NUMBER           = 140500
 
 # Shared arrays for tensorboard
 episode_rewards        = []
@@ -318,7 +316,10 @@ with tf.device("/cpu:0"):
             p=ckpt.model_checkpoint_path
             p=p[p.find('-')+1:]
             p=p[:p.find('.')]
-            episode_count=int(p)
+            if TRAINING:
+                episode_count = int(p)
+            else:
+                episode_count = 0
             saver.restore(sess,ckpt.model_checkpoint_path)
             print("episode_count set to ",episode_count)
             if RESET_TRAINER:
@@ -327,4 +328,4 @@ with tf.device("/cpu:0"):
         worker.work(max_episode_length,gamma,sess,coord,saver)
 
 if not TRAINING:
-    print([np.mean(episode_lengths), np.sqrt(np.var(episode_lengths)), np.mean(np.asarray(episode_lengths < max_episode_length, dtype=float))])
+    print([np.mean(episode_lengths), np.sqrt(np.var(episode_lengths)), np.mean(np.asarray(np.asarray(episode_lengths) < max_episode_length, dtype=float))])
