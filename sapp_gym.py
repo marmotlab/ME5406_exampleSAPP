@@ -23,7 +23,6 @@ from gym.envs.classic_control import rendering
 
 ACTION_COST, IDLE_COST, GOAL_REWARD, COLLISION_REWARD = -0.1, -0.2, 1.0, -1.0
 opposite_actions = {0: -1, 1: 3, 2: 4, 3: 1, 4: 2, 5: 7, 6: 8, 7: 5, 8: 6}
-JOINT = False # True for joint estimation of rewards for closeby agents
 dirDict = {0:(0,0),1:(0,1),2:(1,0),3:(0,-1),4:(-1,0),5:(1,1),6:(1,-1),7:(-1,-1),8:(-1,1)}
 actionDict={v:k for k,v in dirDict.items()}
 
@@ -45,7 +44,7 @@ class State(object):
         self.state                    = world0.copy()
         self.goals                    = goals.copy()
         self.agent_pos, self.agent_past, self.agent_goal = self.scanForAgent()
-        self.diagonal                 = diagonal
+        self.diagonal                 = diagonal # true or false
 
     def scanForAgent(self):
         agent_pos  = (-1,-1)
@@ -83,7 +82,8 @@ class State(object):
 
         # Otherwise, let's look at the validity of the move
         dx,dy = direction[0], direction[1]
-        if(ax+dx >= self.state.shape[0] or ax+dx < 0 or ay+dy >= self.state.shape[1] or ay+dy < 0): #out of bounds
+        if(ax+dx >= self.state.shape[0] or ax+dx < 0 or 
+           ay+dy >= self.state.shape[1] or ay+dy < 0): #out of bounds
             return -1
         if(self.state[ax+dx,ay+dy] < 0): #collide with static obstacle
             return -2
@@ -122,7 +122,7 @@ class State(object):
 class SAPPEnv(gym.Env):
 
     # Initialize env
-    def __init__(self, observation_size=11, world0=None, goals0=None, DIAGONAL_MOVEMENT=False, SIZE=(10,40), PROB=(0,.5), blank_world=False):
+    def __init__(self, observation_size=11, world0=None, goals0=None, DIAGONAL_MOVEMENT=False, SIZE=(10,40), PROB=(0,.5)):
         """
         Args:
             DIAGONAL_MOVEMENT: if the agents are allowed to move diagonally
@@ -139,7 +139,7 @@ class SAPPEnv(gym.Env):
         self.DIAGONAL_MOVEMENT  = DIAGONAL_MOVEMENT
 
         # Initialize data structures
-        self._setWorld(world0,goals0,blank_world=blank_world)
+        self._setWorld(world0,goals0)
         if DIAGONAL_MOVEMENT:
             self.action_space = spaces.Tuple([spaces.Discrete(1), spaces.Discrete(9)])
         else:
@@ -178,9 +178,8 @@ class SAPPEnv(gym.Env):
     def getObstacleMap(self):
         return (self.world.state == -1).astype(int)
     
-    def _setWorld(self, world0=None, goals0=None, blank_world=False):
+    def _setWorld(self, world0=None, goals0=None):
 
-        #blank_world is a flag indicating that the world given has no agent or goal positions 
         def getConnectedRegion(world,x,y):
             sys.setrecursionlimit(1000000)
             '''returns a list of tuples of connected squares to the given tile
@@ -205,37 +204,13 @@ class SAPPEnv(gym.Env):
         #defines the State object, which includes initializing goals and agents
         #sets the world to world0 and goals, or if they are None randomizes world
         if not (world0 is None):
-            if goals0 is None and not blank_world:
+            if goals0 is None:
                 raise Exception("you gave a world with no goals!")
-
-            if blank_world:
-                #RANDOMIZE THE POSITION OF THE AGENT
-                agent_placed = False
-                while not agent_placed:
-                    x, y = np.random.randint(0,world0.shape[0]), np.random.randint(0,world0.shape[1])
-                    if(world0[x,y] == 0):
-                        world0[x,y]  = 1
-                        agent_pos    = (x,y)
-                        agent_placed = True
-
-                #RANDOMIZE THE GOAL OF THE AGENT
-                goals0 = np.zeros(world0.shape).astype(int)
-                goal_placed = False
-                while not goal_placed:
-                    valid_tiles = getConnectedRegion(world0, agent_pos[0], agent_pos[1])
-                    x,y         = random.choice(list(valid_tiles))
-                    if(goals0[x,y] == 0 and world0[x,y] != -1):
-                        goals0[x,y] = 1
-                        goal_placed = True
-
-                self.initial_world = world0.copy()
-                self.initial_goals = goals0.copy()
-                self.world = State(self.initial_world, self.initial_goals, self.DIAGONAL_MOVEMENT)
-                return
 
             self.initial_world = world0
             self.initial_goals = goals0
             self.world = State(world0, goals0, self.DIAGONAL_MOVEMENT)
+            # self.world.state, self.world.goals
             return
 
         #otherwise we have to randomize the world
@@ -301,7 +276,7 @@ class SAPPEnv(gym.Env):
             dx = dx/mag
             dy = dy/mag
 
-        return ([obs_map,pos_map,goal_map], [dx,dy,mag])
+        return ([obs_map,pos_map,goal_map], [dx,dy,mag]) # (3,11,11) (1,3)
 
     # Resets environment
     def reset(self, world0=None, goals0=None):
@@ -324,9 +299,6 @@ class SAPPEnv(gym.Env):
         # Check action input
         assert action in range(n_actions), 'Invalid action'
 
-        #get start location of agent
-        agentStartLocation = self.world.getPos()
-        
         # Execute action & determine reward
         action_status = self.world.act(action)
         #     1: action executed and reached on goal
@@ -334,6 +306,7 @@ class SAPPEnv(gym.Env):
         #    -1: out of bounds
         #    -2: collision with obstacle
 
+        # ACTION_COST, IDLE_COST, GOAL_REWARD, COLLISION_REWARD = -0.1, -0.2, 1.0, -1.0
         reward = ACTION_COST
         if action == 0: # staying still
             if self.world.getPos() == self.world.getGoal():
@@ -349,12 +322,12 @@ class SAPPEnv(gym.Env):
         self.finished |= (self.world.getPos() == self.world.getGoal())
 
         # Perform observation
-        state = self._observe()
+        observation = self._observe()
 
         # next valid actions
         nextActions = self._listNextValidActions(action)
 
-        return state, reward, self.finished, nextActions
+        return observation, reward, self.finished, nextActions
 
     def _listNextValidActions(self, prev_action=0):
 #         available_actions = [0] # staying still always allowed
@@ -381,6 +354,9 @@ class SAPPEnv(gym.Env):
 
         return available_actions
 
+    
+    ######## RENDERING STUFFS ########
+    
     def drawStar(self, centerX, centerY, diameter, numPoints, color):
         outerRad=diameter//2
         innerRad=int(outerRad*3/8)
