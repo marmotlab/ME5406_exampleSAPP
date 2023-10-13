@@ -5,4 +5,4 @@ tensorflow==2.6.0
 python==3.8.10
 
 # Once installed and activated, please run
-# pip install --user gym==0.21.0 pyglet==1.5.27 imageio matplotlib scipy numpy jupyter
+# pip install --user gym==0.21.0 pyglet==1.5.27 numpy==1.23.5 keras==2.4.2 imageio matplotlib scipy jupyter
