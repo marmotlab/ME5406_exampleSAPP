@@ -7,8 +7,8 @@ from matplotlib.colors import hsv_to_rgb
 import random
 import math
 import copy
-from gym.envs.classic_control import rendering        
-
+from util import renderWorld        
+from astar import astar
 
 '''
     Observation: (position maps of current agent, current goal, obstacles), vector to goal (vx, vy, norm_v)
@@ -23,6 +23,7 @@ from gym.envs.classic_control import rendering
 
 ACTION_COST, IDLE_COST, GOAL_REWARD, COLLISION_REWARD = -0.1, -0.2, 1.0, -1.0
 opposite_actions = {0: -1, 1: 3, 2: 4, 3: 1, 4: 2, 5: 7, 6: 8, 7: 5, 8: 6}
+JOINT = False # True for joint estimation of rewards for closeby agents
 dirDict = {0:(0,0),1:(0,1),2:(1,0),3:(0,-1),4:(-1,0),5:(1,1),6:(1,-1),7:(-1,-1),8:(-1,1)}
 actionDict={v:k for k,v in dirDict.items()}
 
@@ -44,7 +45,7 @@ class State(object):
         self.state                    = world0.copy()
         self.goals                    = goals.copy()
         self.agent_pos, self.agent_past, self.agent_goal = self.scanForAgent()
-        self.diagonal                 = diagonal # true or false
+        self.diagonal                 = diagonal
 
     def scanForAgent(self):
         agent_pos  = (-1,-1)
@@ -82,8 +83,7 @@ class State(object):
 
         # Otherwise, let's look at the validity of the move
         dx,dy = direction[0], direction[1]
-        if(ax+dx >= self.state.shape[0] or ax+dx < 0 or 
-           ay+dy >= self.state.shape[1] or ay+dy < 0): #out of bounds
+        if(ax+dx >= self.state.shape[0] or ax+dx < 0 or ay+dy >= self.state.shape[1] or ay+dy < 0): #out of bounds
             return -1
         if(self.state[ax+dx,ay+dy] < 0): #collide with static obstacle
             return -2
@@ -122,7 +122,7 @@ class State(object):
 class SAPPEnv(gym.Env):
 
     # Initialize env
-    def __init__(self, observation_size=11, world0=None, goals0=None, DIAGONAL_MOVEMENT=False, SIZE=(10,40), PROB=(0,.5)):
+    def __init__(self, observation_size=11, world0=None, goals0=None, DIAGONAL_MOVEMENT=False, SIZE=(10,40), PROB=(0,.5), blank_world=False):
         """
         Args:
             DIAGONAL_MOVEMENT: if the agents are allowed to move diagonally
@@ -139,7 +139,7 @@ class SAPPEnv(gym.Env):
         self.DIAGONAL_MOVEMENT  = DIAGONAL_MOVEMENT
 
         # Initialize data structures
-        self._setWorld(world0,goals0)
+        self._setWorld(world0,goals0,blank_world=blank_world)
         if DIAGONAL_MOVEMENT:
             self.action_space = spaces.Tuple([spaces.Discrete(1), spaces.Discrete(9)])
         else:
@@ -178,8 +178,9 @@ class SAPPEnv(gym.Env):
     def getObstacleMap(self):
         return (self.world.state == -1).astype(int)
     
-    def _setWorld(self, world0=None, goals0=None):
+    def _setWorld(self, world0=None, goals0=None, blank_world=False):
 
+        #blank_world is a flag indicating that the world given has no agent or goal positions 
         def getConnectedRegion(world,x,y):
             sys.setrecursionlimit(1000000)
             '''returns a list of tuples of connected squares to the given tile
@@ -204,13 +205,37 @@ class SAPPEnv(gym.Env):
         #defines the State object, which includes initializing goals and agents
         #sets the world to world0 and goals, or if they are None randomizes world
         if not (world0 is None):
-            if goals0 is None:
+            if goals0 is None and not blank_world:
                 raise Exception("you gave a world with no goals!")
+
+            if blank_world:
+                #RANDOMIZE THE POSITION OF THE AGENT
+                agent_placed = False
+                while not agent_placed:
+                    x, y = np.random.randint(0,world0.shape[0]), np.random.randint(0,world0.shape[1])
+                    if(world0[x,y] == 0):
+                        world0[x,y]  = 1
+                        agent_pos    = (x,y)
+                        agent_placed = True
+
+                #RANDOMIZE THE GOAL OF THE AGENT
+                goals0 = np.zeros(world0.shape).astype(int)
+                goal_placed = False
+                while not goal_placed:
+                    valid_tiles = getConnectedRegion(world0, agent_pos[0], agent_pos[1])
+                    x,y         = random.choice(list(valid_tiles))
+                    if(goals0[x,y] == 0 and world0[x,y] != -1):
+                        goals0[x,y] = 1
+                        goal_placed = True
+
+                self.initial_world = world0.copy()
+                self.initial_goals = goals0.copy()
+                self.world = State(self.initial_world, self.initial_goals, self.DIAGONAL_MOVEMENT)
+                return
 
             self.initial_world = world0
             self.initial_goals = goals0
             self.world = State(world0, goals0, self.DIAGONAL_MOVEMENT)
-            # self.world.state, self.world.goals
             return
 
         #otherwise we have to randomize the world
@@ -276,7 +301,7 @@ class SAPPEnv(gym.Env):
             dx = dx/mag
             dy = dy/mag
 
-        return ([obs_map,pos_map,goal_map], [dx,dy,mag]) # (3,11,11) (1,3)
+        return ([obs_map,pos_map,goal_map], [dx,dy,mag])
 
     # Resets environment
     def reset(self, world0=None, goals0=None):
@@ -291,6 +316,14 @@ class SAPPEnv(gym.Env):
 
         return self._observe(), self._listNextValidActions()
 
+    def getExpertActions(self):
+        # Get the expert action
+        path = astar(self.world.state, self.world.getPos(), self.world.getGoal())
+        if len(path) == 0:
+            return 0
+        allActions = [self.world.getAction((path[i+1][0]-path[i][0], path[i+1][1]-path[i][1])) for i in range(len(path)-1)]
+        return allActions
+
     # Executes an action and returns new state, reward, done, and next valid actions
     def step(self, action):
         self.fresh = False
@@ -299,6 +332,9 @@ class SAPPEnv(gym.Env):
         # Check action input
         assert action in range(n_actions), 'Invalid action'
 
+        #get start location of agent
+        agentStartLocation = self.world.getPos()
+        
         # Execute action & determine reward
         action_status = self.world.act(action)
         #     1: action executed and reached on goal
@@ -306,7 +342,6 @@ class SAPPEnv(gym.Env):
         #    -1: out of bounds
         #    -2: collision with obstacle
 
-        # ACTION_COST, IDLE_COST, GOAL_REWARD, COLLISION_REWARD = -0.1, -0.2, 1.0, -1.0
         reward = ACTION_COST
         if action == 0: # staying still
             if self.world.getPos() == self.world.getGoal():
@@ -322,12 +357,12 @@ class SAPPEnv(gym.Env):
         self.finished |= (self.world.getPos() == self.world.getGoal())
 
         # Perform observation
-        observation = self._observe()
+        state = self._observe()
 
         # next valid actions
         nextActions = self._listNextValidActions(action)
 
-        return observation, reward, self.finished, nextActions
+        return state, reward, self.finished, nextActions
 
     def _listNextValidActions(self, prev_action=0):
 #         available_actions = [0] # staying still always allowed
@@ -354,115 +389,8 @@ class SAPPEnv(gym.Env):
 
         return available_actions
 
-    
-    ######## RENDERING STUFFS ########
-    
-    def drawStar(self, centerX, centerY, diameter, numPoints, color):
-        outerRad=diameter//2
-        innerRad=int(outerRad*3/8)
-        #fill the center of the star
-        angleBetween=2*math.pi/numPoints#angle between star points in radians
-        for i in range(numPoints):
-            #p1 and p3 are on the inner radius, and p2 is the point
-            pointAngle=math.pi/2+i*angleBetween
-            p1X=centerX+innerRad*math.cos(pointAngle-angleBetween/2)
-            p1Y=centerY-innerRad*math.sin(pointAngle-angleBetween/2)
-            p2X=centerX+outerRad*math.cos(pointAngle)
-            p2Y=centerY-outerRad*math.sin(pointAngle)
-            p3X=centerX+innerRad*math.cos(pointAngle+angleBetween/2)
-            p3Y=centerY-innerRad*math.sin(pointAngle+angleBetween/2)
-            #draw the triangle for each tip.
-            poly=rendering.FilledPolygon([(p1X,p1Y),(p2X,p2Y),(p3X,p3Y)])
-            poly.set_color(color[0],color[1],color[2])
-            poly.add_attr(rendering.Transform())
-            self.viewer.add_onetime(poly)
-
-    def create_rectangle(self,x,y,width,height,fill,permanent=False):
-        ps=[(x,y),((x+width),y),((x+width),(y+height)),(x,(y+height))]
-        rect=rendering.FilledPolygon(ps)
-        rect.set_color(fill[0],fill[1],fill[2])
-        rect.add_attr(rendering.Transform())
-        if permanent:
-            self.viewer.add_geom(rect)
-        else:
-            self.viewer.add_onetime(rect)
-    def create_circle(self,x,y,diameter,size,fill,resolution=20):
-        c=(x+size/2,y+size/2)
-        dr=math.pi*2/resolution
-        ps=[]
-        for i in range(resolution):
-            x=c[0]+math.cos(i*dr)*diameter/2
-            y=c[1]+math.sin(i*dr)*diameter/2
-            ps.append((x,y))
-        circ=rendering.FilledPolygon(ps)
-        circ.set_color(fill[0],fill[1],fill[2])
-        circ.add_attr(rendering.Transform())
-        self.viewer.add_onetime(circ)
-
-    def initColors(self):
-        #c = {a+1:hsv_to_rgb(np.array([a/float(self.num_agents),1,1])) for a in range(self.num_agents)}
-        return {1: np.asarray([1., 0., 0.])}
-
-    def _render(self, mode='human', close=False, screen_width=800, screen_height=800, action_probs=None):
-        if close == True:
-            return
-
-        # action_probs is an optional parameter which provides a visualization of the action probabilities of the agent at each step
-        size=screen_width/max(self.world.state.shape[0],self.world.state.shape[1])
-        colors=self.initColors()
-        if self.viewer==None:
-            self.viewer=rendering.Viewer(screen_width,screen_height)
-            self.reset_renderer=True
-
-        if self.reset_renderer:
-            self.create_rectangle(0,0,screen_width,screen_height,(.6,.6,.6),permanent=True)
-            for i in range(self.world.state.shape[0]):
-                start=0
-                end=1
-                scanning=False
-                write=False
-                for j in range(self.world.state.shape[1]):
-                    if(self.world.state[i,j]!=-1 and not scanning):#free
-                        start=j
-                        scanning=True
-                    if((j==self.world.state.shape[1]-1 or self.world.state[i,j] == -1) and scanning):
-                        end=j+1 if j==self.world.state.shape[1]-1 else j
-                        scanning=False
-                        write=True
-                    if write:
-                        x=i*size
-                        y=start*size
-                        self.create_rectangle(x,y,size,size*(end-start),(1,1,1),permanent=True)
-                        write=False
-
-        i,j=self.world.getPos()
-        x=i*size
-        y=j*size
-        color=colors[self.world.state[i,j]]
-        self.create_rectangle(x,y,size,size,color)
-        i,j=self.world.getGoal()
-        x=i*size
-        y=j*size
-        color=colors[self.world.goals[i,j]]
-        self.create_circle(x,y,size,size,color)
-        if self.world.getGoal() == self.world.getPos():
-            color=(0,0,0)
-            self.create_circle(x,y,size,size,color)
-
-        if action_probs is not None:
-            n_moves=9 if self.DIAGONAL_MOVEMENT else 5
-            #take the a_dist from the given data and draw it on the frame
-            a_dist = action_probs
-            if a_dist is not None:
-                for m in range(n_moves):
-                    dx,dy=self.world.getDir(m)
-                    x=(self.world.getPos()[0]+dx)*size
-                    y=(self.world.getPos()[1]+dy)*size
-                    s=a_dist[m]*size
-                    self.create_circle(x,y,s,size,(0,0,0))
-
-        self.reset_renderer=False
-        return self.viewer.render(return_rgb_array = mode=='rgb_array')
+    def _render(self, scale=50):
+        return renderWorld(world=-self.getObstacleMap(), scale=scale, agent=self.world.getPos(), goal=self.world.getGoal())
 
 if __name__=='__main__':
     env = SAPPEnv(PROB=(.3,.5), SIZE=(10,11), DIAGONAL_MOVEMENT=False)
